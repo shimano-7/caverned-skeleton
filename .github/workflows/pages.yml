@@ -31,10 +31,10 @@ jobs:
           key: jquants-v1-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             jquants-v1-
-      - name: Update real Japanese market data
+      - name: Diagnose saved Japanese market data (no API access)
         timeout-minutes: 11
         env:
-          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+          CACHE_ONLY: 'true'
           SCREEN_LIMIT: '10'
         run: npm run update:market
       - uses: actions/cache/save@v4

@@ -38,9 +38,43 @@ export function evaluate(stock, now=new Date()){
   const verdict=score>=70&&technical.verdict==='買い'&&strength<75?'買い候補':score<40||technical.verdict==='見送り'?'見送り':'待ち';
   return {...stock,score,verdict,checks:rules.map(([label,passed,points])=>({label,passed,points})),technical:{ma25,ma75,rsi:strength,volumeRatio,latestCross:technical.crosses.at(-1)||null},priceDate:last.date,close:last.close,volume:last.volume};
 }
+export const financialLabels={salesGrowth:'売上成長率',profitGrowth:'利益成長率',per:'PER',pbr:'PBR',roe:'ROE',dividendYield:'配当利回り'};
+export function diagnoseStock(stock,now=new Date()){
+  const rows=Array.isArray(stock.rows)?stock.rows:[],m=stock.metrics||{};
+  const valid=rows.length>0&&rows.every((r,i)=>Number.isFinite(r.close)&&r.close>0&&Number.isFinite(r.volume)&&r.volume>=0&&Number.isFinite(Date.parse(r.date))&&(!i||r.date>rows[i-1].date));
+  const priceAge=valid?(now-Date.parse(rows.at(-1).date))/86400000:NaN;
+  const missingMetrics=Object.keys(financialLabels).filter(k=>!Number.isFinite(m[k]));
+  const financialAge=(now-Date.parse(m.disclosedAt))/86400000;
+  const checks={
+    price:{status:stock.priceError?'invalid':!rows.length?'missing':!valid?'invalid':priceAge>7?'stale':priceAge<0?'invalid':'available',count:rows.length,lastDate:rows.at(-1)?.date||null},
+    financials:{status:stock.financialError?'uncomputable':missingMetrics.length?'missing':!Number.isFinite(financialAge)?'invalid':financialAge>460?'stale':'available',missing:missingMetrics.map(k=>financialLabels[k]),detail:stock.financialError||null},
+    ma25:{status:!valid?'uncomputable':rows.length<25?'missing':'available',count:rows.length,required:25},
+    ma75:{status:!valid?'uncomputable':rows.length<75?'missing':'available',count:rows.length,required:75}
+  };
+  const reasons=[];
+  if(checks.price.status!=='available')reasons.push(stock.priceError?stock.priceError:!rows.length?'株価データなし':!valid?'株価データの値・日付が不正':priceAge>7?'株価が7日超前です':'株価の日付が未来です');
+  if(checks.financials.status!=='available'){
+    if(stock.financialError)reasons.push(stock.financialError);
+    if(missingMetrics.length)reasons.push('財務指標不足：'+checks.financials.missing.join('・'));
+    if(!missingMetrics.length&&!stock.financialError)reasons.push(Number.isFinite(financialAge)?'通期決算が古すぎます':'決算開示日が不足・不正');
+  }
+  if(checks.ma25.status!=='available')reasons.push(`25日移動平均：${valid?rows.length+'本 / 必要25本':'有効な株価がなく計算不可'}`);
+  if(checks.ma75.status!=='available')reasons.push(`75日移動平均：${valid?rows.length+'本 / 必要75本':'有効な株価がなく計算不可'}`);
+  if(valid&&rows.length<76)reasons.push('GC/DC判定には76本必要です');
+  return {code:stock.code,name:stock.name||stock.code,checks,reasons,reason:reasons.join(' / '),priceFetchedAt:stock.priceFetchedAt||null,financialsFetchedAt:stock.financialsFetchedAt||null};
+}
+export function exclusionSummary(excluded){
+  const categories={price:0,financials:0,ma25:0,ma75:0};
+  for(const item of excluded)for(const key of Object.keys(categories))if(item.checks?.[key]?.status&&item.checks[key].status!=='available')categories[key]++;
+  return {total:excluded.length,categories};
+}
 export function rank(stocks, now=new Date()){
   const eligible=[],excluded=[];
-  for(const stock of stocks)try{eligible.push(evaluate(stock,now));}catch(e){excluded.push({code:stock.code,reason:e.message});}
+  for(const stock of stocks){
+    const diagnosis=diagnoseStock(stock,now);
+    if(diagnosis.reasons.length){excluded.push(diagnosis);continue;}
+    try{eligible.push(evaluate(stock,now));}catch{excluded.push({...diagnosis,reason:'追加の評価条件で計算できませんでした',reasons:['追加の評価条件で計算できませんでした']});}
+  }
   eligible.sort((a,b)=>b.score-a.score||a.code.localeCompare(b.code));
-  return {rankings:eligible.slice(0,5),eligibleCount:eligible.length,excluded};
+  return {rankings:eligible.slice(0,5),eligibleCount:eligible.length,excluded,exclusionSummary:exclusionSummary(excluded)};
 }

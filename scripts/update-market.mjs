@@ -5,6 +5,7 @@ const base={schemaVersion:1,market:'JP',source:{name:'JPX J-Quants API v2',url:'
 const out=process.env.MARKET_OUTPUT||'data/japan.json';
 import {openCache,reusableSnapshot} from './market-cache.mjs';
 import {join} from 'node:path';
+import {diagnoseCache} from './diagnose-cache.mjs';
 import {createClient,MarketError} from './market-client.mjs';
 export async function collect(apiKey,request=fetch,options={}){
   const {totalTimeoutMs=600000,log=console.log,...clientOptions}=options;
@@ -53,10 +54,15 @@ if(process.argv[1]?.endsWith('update-market.mjs')){
   const snapshotPath=join(process.env.MARKET_CACHE_DIR||'.market-cache','snapshot.json');
   let result;
   try{
+    if(process.env.CACHE_ONLY==='true'){
+      result=diagnoseCache(cache);
+    }else{
     if(!process.env.JQUANTS_API_KEY)throw new MarketError('JQUANTS_API_KEYが未設定です。GitHub Secretsを設定してください。');
     result=await collect(process.env.JQUANTS_API_KEY,fetch,{cache,rateState:cache.state.rate,onCooldown:cache.save});
-    if(result.status!=='ok')throw new MarketError(result.message);
+    // 0件でも除外理由を消さず保存する。
+    for(const item of result.excluded||[])console.log(`Excluded ${item.code}: ${item.reason}`);
     if(result.status==='ok')await writeFile(snapshotPath,JSON.stringify(result));
+    }
   }catch(e){
     const message=e instanceof MarketError?e.message:'データ更新に失敗しました。設定と接続を確認してください。';
     result={...base,message};
