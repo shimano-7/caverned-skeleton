@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {movingAverage,analyze,parseCSV,sample} from '../analysis.js';
+const series = values => values.map((close,i)=>({date:String(i),close,volume:100}));
+test('移動平均は必要本数から計算される',()=>{const a=movingAverage(series(Array.from({length:80},(_,i)=>i+1)),25);assert.equal(a[23],null);assert.equal(a[24],13);assert.equal(a[79],68);});
+test('上昇・下落・不足データの参考判定',()=>{assert.equal(analyze(series(Array.from({length:100},(_,i)=>i+1))).verdict,'買い');assert.equal(analyze(series(Array.from({length:100},(_,i)=>200-i))).verdict,'見送り');assert.equal(analyze(series([10,20])).verdict,'待ち');});
+test('ゴールデンとデッドクロスをそれぞれ検出',()=>{const values=[...Array(80).fill(100),...Array.from({length:80},(_,i)=>101+i),...Array.from({length:100},(_,i)=>180-i)];const a=analyze(series(values));assert.deepEqual(a.crosses.map(c=>c.type),['golden','dead']);assert.equal(a.crosses[0].index,80);});
+test('横ばいにクロスは発生しない',()=>assert.equal(analyze(series(Array(100).fill(100))).crosses.length,0));
+test('CSVはBOM・日本語・引用符付き数値・降順に対応',()=>{assert.deepEqual(parseCSV('\uFEFF日付,終値,出来高\r\n2026/1/5,"1,234.5","2,000"\r\n2026/1/2,1200,0'),[{date:'2026-01-02',close:1200,volume:0},{date:'2026-01-05',close:1234.5,volume:2000}]);});
+test('CSVの欠落・重複・不正日付・不正数値を拒否',()=>{for(const csv of ['date,close\n2026-01-01,2','date,close,volume\n2026-02-30,2,3','date,close,volume\n2026-01-01,,3','date,close,volume\n2026-01-01,0,3','date,close,volume\n2026-01-01,2,-1','date,close,volume\n2026-01-01,2,1.5','date,close,volume\n2026-01-01,2,3\n2026/1/1,3,4'])assert.throws(()=>parseCSV(csv));});
+test('日米サンプルがCSVで再取り込み可能',()=>{for(const market of ['JP','US']){const rows=sample(market);assert.equal(rows.length,180);assert.deepEqual(parseCSV('date,close,volume\n'+rows.map(r=>`${r.date},${r.close},${r.volume}`).join('\n')),rows);assert.ok(analyze(rows).crosses.length>0);}});
