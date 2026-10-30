@@ -30,7 +30,8 @@ export function evaluate(stock, now=new Date()){
   if(rows.length<76)throw Error('76営業日以上の価格が必要');
   if((now-Date.parse(rows.at(-1).date))/86400000>7)throw Error('株価が7日超前です');
   if((now-Date.parse(m.disclosedAt))/86400000>460)throw Error('通期決算が古すぎます');
-  if(['salesGrowth','profitGrowth','per','pbr','roe','dividendYield'].some(k=>!Number.isFinite(m[k])))throw Error('必須財務指標が不足');
+  const missingMetrics=['salesGrowth','profitGrowth','per','pbr','roe','dividendYield'].filter(k=>!Number.isFinite(m[k]));
+  if(missingMetrics.length)throw Error(`必須財務指標が不足: ${missingMetrics.join(', ')}`);
   const technical=analyze(rows),strength=rsi(rows),last=rows.at(-1),ma25=technical.ma25.at(-1),ma75=technical.ma75.at(-1);
   const baseline=rows.slice(-21,-1).reduce((sum,r)=>sum+r.volume,0)/20,volumeRatio=baseline>0?last.volume/baseline:null;
   const rules=[['売上成長率10%以上',m.salesGrowth>=10,15],['利益成長率10%以上',m.profitGrowth>=10,15],['PER 0〜20倍',m.per>0&&m.per<=20,10],['PBR 0〜1.5倍',m.pbr>0&&m.pbr<=1.5,10],['ROE 8%以上',m.roe>=8,10],['配当利回り2%以上',m.dividendYield>=2,5],['25日線が75日線より上',ma25>ma75,10],['終値が25日線より上',last.close>ma25,10],['RSI 40〜70',strength>=40&&strength<=70,10],['出来高が直前20日平均の1.2倍以上',volumeRatio>=1.2,5]];
