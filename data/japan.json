@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "market": "JP",
+  "source": {
+    "name": "JPX J-Quants API v2",
+    "url": "https://jpx-jquants.com/"
+  },
+  "generatedAt": "2026-10-30T22:30:54.583Z",
+  "rankings": [],
+  "status": "unavailable",
+  "coverage": {},
+  "message": "JQUANTS_API_KEYが未設定です。GitHub Secretsを設定してください。"
+}

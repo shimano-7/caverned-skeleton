@@ -1,5 +1,6 @@
 import { analyze, sample, parseCSV } from './analysis.js';
 const $ = id => document.getElementById(id);
+// 架空サンプルは明示的に開く手動分析専用。自動発掘には使用しません。
 let market = 'JP', rows = sample(), range = 180, source = 'sample';
 const format = n => n == null ? '—' : new Intl.NumberFormat('ja-JP', { maximumFractionDigits: 2, minimumFractionDigits: market === 'US' ? 2 : 0 }).format(n);
 const money = n => n == null ? '—' : `${market === 'JP' ? '¥' : '$'}${format(n)}`;
@@ -90,3 +91,10 @@ $('download-button').onclick = () => {
   const link = document.createElement('a'); link.href = url; link.download = `sample-${market}.csv`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 render();
+window.addEventListener('select-stock',event=>{
+  const s=event.detail;market='JP';rows=s.rows;source='live';
+  document.querySelectorAll('[data-market]').forEach(b=>{b.classList.toggle('active',b.dataset.market==='JP');b.setAttribute('aria-pressed',String(b.dataset.market==='JP'));});
+  $('stock-name').value=s.name;document.getElementById('manual-analysis').open=true;
+  $('message').textContent=`JPX J-Quants API v2 ｜ 株価基準日 ${s.priceDate} ｜ 実データ（調整済み）`;
+  render();$('source-tag').textContent='J-QUANTS';$('chart-title').scrollIntoView({behavior:'smooth',block:'start'});
+});

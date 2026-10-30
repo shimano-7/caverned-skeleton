@@ -1,0 +1,11 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {rsi,normalizeBars,fundamentals,evaluate,rank} from '../discovery.js';
+const now=new Date('2026-10-31T00:00:00Z');
+const rows=Array.from({length:100},(_,i)=>({date:new Date(Date.UTC(2026,6,23+i)).toISOString().slice(0,10),close:100+i,volume:1000}));
+const metrics={salesGrowth:20,profitGrowth:20,per:10,pbr:1,roe:12,dividendYield:3,disclosedAt:'2026-05-01'};
+const stock=(code='10000')=>({code,rows,metrics});
+test('RSI上昇100、横ばい50、短期は欠損',()=>{assert.equal(rsi(rows),100);assert.equal(rsi(rows.map(r=>({...r,close:1}))),50);assert.equal(rsi(rows.slice(0,5)),null);});
+test('ランキングの上位5件と同点順序・過熱は買い候補にしない',()=>{const r=rank(['6','5','4','3','2','1'].map(stock),now);assert.equal(r.rankings.length,5);assert.equal(r.rankings[0].code,'1');assert.equal(r.rankings[0].verdict,'待ち');assert.equal(r.rankings[0].score,85);});
+test('欠損、古い株価、古い財務、不足価格をランキング除外',()=>{const missing={...stock(),metrics:{...metrics,per:null}},stale={...stock(),rows:rows.map(r=>({...r,date:r.date.replace('2026','2025')}))};const r=rank([missing,stale,{...stock(),rows:rows.slice(0,20)},{...stock(),metrics:{...metrics,disclosedAt:'2020-01-01'}}],now);assert.equal(r.rankings.length,0);assert.equal(r.excluded.length,4);});
+test('通期実績で成長率・平均資本ROEを算出、訂正は最新開示',()=>{const records=[{CurPerType:'FY',CurFYEn:'2025-03-31',DiscDate:'2025-05-01',Sales:100,NP:10,Eq:80},{CurPerType:'FY',CurFYEn:'2026-03-31',DiscDate:'2026-05-01',Sales:120,NP:12,Eq:120,EPS:5,BPS:100,DivAnn:2}];const m=fundamentals(records,100,'2026-10-30');assert.ok(Math.abs(m.salesGrowth-20)<1e-8);assert.equal(m.roe,12);assert.equal(m.per,20);assert.equal(m.dividendYield,2);assert.throws(()=>fundamentals(records,100,'2025-06-01'));assert.equal(fundamentals([{...records[0],NP:-1},records[1]],100,'2026-10-30').profitGrowth,null);});
+test('価格取得形式検証と欠損値を0にしない',()=>{assert.throws(()=>normalizeBars([{Date:'2026-01-01',AdjC:'',AdjVo:2}]));assert.equal(normalizeBars([{Date:'2026-01-01',AdjC:2,AdjVo:3,C:4}])[0].rawClose,4);});
