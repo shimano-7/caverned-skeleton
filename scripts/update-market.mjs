@@ -46,6 +46,7 @@ export async function collect(apiKey,request=fetch,options={}){
     }
   }
   const ranked=rank(stocks);
+  for (const excluded of ranked.excluded) log(`Ranking excluded ${excluded.code}: ${excluded.reason}`);
   return {...base,...ranked,status:ranked.rankings.length?'ok':'unavailable',coverage:{universe:universe.length,attempted,eligible:ranked.eligibleCount,selection:'東証プライム・コード昇順（上限あり）。全市場ランキングではありません。'},excluded:[...errors,...ranked.excluded],message:ranked.rankings.length?'分析対象内の上位銘柄です。':'必要な実データがそろわず、ランキングを生成できませんでした。'};
   } finally {clearTimeout(timer);controller.abort();}
 }
