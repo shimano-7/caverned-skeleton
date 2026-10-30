@@ -39,13 +39,14 @@ export async function collect(apiKey,request=fetch,options={}){
     }catch(e){
       if(controller.signal.aborted)throw new MarketError('取得処理の制限時間に達しました',{fatal:true});
       if(e instanceof MarketError && e.fatal)throw e;
-      const reason=e instanceof MarketError?e.message:'価格または財務データが不足・不正';
+      const reason=e instanceof Error?e.message:String(e);
       errors.push({code:String(s.Code),reason});
       log(`Stock ${attempted}/${selected.length}: excluded (${reason})`);
       if(++consecutiveErrors>=5)throw new MarketError('5銘柄連続で取得・検証に失敗したため中止しました',{fatal:true});
     }
   }
   const ranked=rank(stocks);
+  for (const excluded of ranked.excluded) log(`Ranking excluded ${excluded.code}: ${excluded.reason}`);
   return {...base,...ranked,status:ranked.rankings.length?'ok':'unavailable',coverage:{universe:universe.length,attempted,eligible:ranked.eligibleCount,selection:'東証プライム・コード昇順（上限あり）。全市場ランキングではありません。'},excluded:[...errors,...ranked.excluded],message:ranked.rankings.length?'分析対象内の上位銘柄です。':'必要な実データがそろわず、ランキングを生成できませんでした。'};
   } finally {clearTimeout(timer);controller.abort();}
 }
@@ -62,6 +63,7 @@ if(process.argv[1]?.endsWith('update-market.mjs')){
     // 0件でも除外理由を消さず保存する。
     for(const item of result.excluded||[])console.log(`Excluded ${item.code}: ${item.reason}`);
     if(result.status==='ok')await writeFile(snapshotPath,JSON.stringify(result));
+    console.log(`Ranking diagnostics: attempted=${result.coverage?.attempted??0}, eligible=${result.eligibleCount??0}, excluded=${result.excluded?.length??0}`);
     }
   }catch(e){
     const message=e instanceof MarketError?e.message:'データ更新に失敗しました。設定と接続を確認してください。';
