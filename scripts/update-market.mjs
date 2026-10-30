@@ -1,16 +1,19 @@
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {normalizeBars,fundamentals,rank} from '../discovery.js';
 const generatedAt=new Date().toISOString();
 const base={schemaVersion:1,market:'JP',source:{name:'JPX J-Quants API v2',url:'https://jpx-jquants.com/'},generatedAt,rankings:[],status:'unavailable',coverage:{}};
 const out=process.env.MARKET_OUTPUT||'data/japan.json';
+import {openCache,reusableSnapshot} from './market-cache.mjs';
+import {join} from 'node:path';
 import {createClient,MarketError} from './market-client.mjs';
 export async function collect(apiKey,request=fetch,options={}){
-  const {totalTimeoutMs=300000,log=console.log,...clientOptions}=options;
-  const limit=Number(options.limit??process.env.SCREEN_LIMIT??20);
+  const {totalTimeoutMs=600000,log=console.log,...clientOptions}=options;
+  const limit=Number(options.limit??process.env.SCREEN_LIMIT??10);
   if(!Number.isInteger(limit)||limit<5||limit>100)throw new MarketError('SCREEN_LIMITは5〜100',{fatal:true});
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),totalTimeoutMs);
-  const api=createClient(apiKey,{request,signal:controller.signal,log,...clientOptions});
+  const rawApi=createClient(apiKey,{request,signal:controller.signal,log,...clientOptions});
+  const api=options.cache?options.cache.wrap(rawApi):rawApi;
   try {
   log(`Market update: master start; limit ${limit}; total budget ${totalTimeoutMs}ms`);
   const master=await api('equities/master');
@@ -24,11 +27,12 @@ export async function collect(apiKey,request=fetch,options={}){
     attempted++;
     log(`Stock ${attempted}/${selected.length}: start`);
     try{
-      const rows=normalizeBars(await api('equities/bars/daily',{code:s.Code,from:from.toISOString().slice(0,10)}));
+      const priceParams={code:s.Code,from:from.toISOString().slice(0,7)+'-01'};
+      const rows=normalizeBars(await api('equities/bars/daily',priceParams));
       if(!rows.length)throw Error('価格なし');
       if(!(rows.at(-1).rawClose>0))throw Error('未調整終値なし');
       const raw=await api('fins/summary',{code:s.Code});
-      stocks.push({code:String(s.Code),name:s.CoName,market:'JP',rows,metrics:fundamentals(raw,rows.at(-1).rawClose,rows.at(-1).date)});
+      stocks.push({code:String(s.Code),name:s.CoName,market:'JP',rows,priceFetchedAt:new Date(options.cache?.timestamp('equities/bars/daily',priceParams)??Date.now()).toISOString(),financialsFetchedAt:new Date(options.cache?.timestamp('fins/summary',{code:s.Code})??Date.now()).toISOString(),metrics:fundamentals(raw,rows.at(-1).rawClose,rows.at(-1).date)});
       consecutiveErrors=0;
       log(`Stock ${attempted}/${selected.length}: received`);
     }catch(e){
@@ -45,9 +49,24 @@ export async function collect(apiKey,request=fetch,options={}){
   } finally {clearTimeout(timer);controller.abort();}
 }
 if(process.argv[1]?.endsWith('update-market.mjs')){
+  const cache=await openCache(process.env.MARKET_CACHE_DIR||'.market-cache');
+  const snapshotPath=join(process.env.MARKET_CACHE_DIR||'.market-cache','snapshot.json');
   let result;
-  try{if(!process.env.JQUANTS_API_KEY)throw new MarketError('JQUANTS_API_KEYが未設定です。GitHub Secretsを設定してください。');result=await collect(process.env.JQUANTS_API_KEY);}catch(e){result={...base,message:e instanceof MarketError?e.message:'データ更新に失敗しました。設定と接続を確認してください。'};console.error(`Market update stopped: ${result.message}`);}
+  try{
+    if(!process.env.JQUANTS_API_KEY)throw new MarketError('JQUANTS_API_KEYが未設定です。GitHub Secretsを設定してください。');
+    result=await collect(process.env.JQUANTS_API_KEY,fetch,{cache,rateState:cache.state.rate,onCooldown:cache.save});
+    if(result.status!=='ok')throw new MarketError(result.message);
+    if(result.status==='ok')await writeFile(snapshotPath,JSON.stringify(result));
+  }catch(e){
+    const message=e instanceof MarketError?e.message:'データ更新に失敗しました。設定と接続を確認してください。';
+    result={...base,message};
+    try{
+      const previous=JSON.parse(await readFile(snapshotPath,'utf8'));
+      if(reusableSnapshot(previous))result={...previous,lastAttemptAt:new Date().toISOString(),warning:`更新未完了：${message}。取得済みデータを表示しています。`};
+    }catch{}
+    console.error(`Market update stopped: ${message}`);
+  }
   await mkdir(out.slice(0,out.lastIndexOf('/'))||'.',{recursive:true});
   await writeFile(out,JSON.stringify(result,null,2)+'\n');
-  console.log(`Market data: ${result.status}; ${result.rankings.length} entries`);
+  console.log(`Market data: ${result.status}; ${result.rankings.length} entries; cached=${Boolean(result.warning)}`);
 }

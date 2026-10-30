@@ -9,11 +9,16 @@ export function wait(ms,signal){
     signal.addEventListener('abort',onAbort,{once:true});
   });
 }
-export function createClient(apiKey,{request=fetch,signal,requestTimeoutMs=15000,pauseMs=1200,maxPages=10,retryWaitMs=15000,log=console.log}={}){
+export function retryDelay(value,attempt,{now=Date.now(),baseMs=60000,jitterMs=Math.floor(Math.random()*1000)}={}){
+  const seconds=typeof value==='string'&&/^\d+(\.\d+)?$/.test(value.trim())?Number(value)*1000:NaN;
+  const header=Number.isFinite(seconds)?seconds:Math.max(0,Date.parse(value)-now);
+  return Math.max(baseMs*2**attempt,Number.isFinite(header)?header:0)+jitterMs;
+}
+export function createClient(apiKey,{request=fetch,signal,requestTimeoutMs=15000,pauseMs=13000,maxPages=10,retryWaitMs=60000,maxAttempts=3,jitterMs=1000,rateState={},onCooldown=async()=>{},sleep=wait,log=console.log}={}){
   let nextRequest=0;
   async function page(path,params){
-    for(let attempt=0;attempt<2;attempt++){
-      await wait(Math.max(0,nextRequest-Date.now()),signal);
+    for(let attempt=0;attempt<maxAttempts;attempt++){
+      await sleep(Math.max(0,nextRequest-Date.now(),(rateState.blockedUntil||0)-Date.now()),signal);
       nextRequest=Date.now()+pauseMs;
       const controller=new AbortController();
       let timer,onAbort;
@@ -28,7 +33,7 @@ export function createClient(apiKey,{request=fetch,signal,requestTimeoutMs=15000
           const url=new URL('https://api.jquants.com/v2/'+path);
           for(const [k,v]of Object.entries(params))url.searchParams.set(k,v);
           const response=await request(url,{headers:{'x-api-key':apiKey},signal:controller.signal});
-          if(response.status===429||response.status>=500){await response.body?.cancel();return {retry:response.status};}
+          if(response.status===429||response.status>=500){await response.body?.cancel();return {retry:response.status,retryAfter:response.headers?.get('retry-after')};}
           if(!response.ok){await response.body?.cancel();throw new MarketError(`J-Quants ${path}: HTTP ${response.status}`,{fatal:[400,401,403,404].includes(response.status)});}
           const body=await response.json();
           if(!Array.isArray(body.data))throw new MarketError(`J-Quants ${path}: 応答形式が未対応`,{fatal:true});
@@ -36,13 +41,25 @@ export function createClient(apiKey,{request=fetch,signal,requestTimeoutMs=15000
         };
         const result=await Promise.race([operation(),bounded]);
         if(result.body)return result.body;
-        if(attempt===1)throw new MarketError(`J-Quants ${path}: HTTP ${result.retry}（再試行上限）`,{fatal:result.retry===429});
-        log(`API ${path}: HTTP ${result.retry}; retry 1/1`);
+        if(result.retry===429){
+          const delay=retryDelay(result.retryAfter,attempt,{baseMs:retryWaitMs,jitterMs:Math.floor(Math.random()*jitterMs)});
+          rateState.blockedUntil=Date.now()+delay;
+          await onCooldown();
+          log(`API ${path}: HTTP 429; cooldown ${Math.ceil(delay/1000)}s`);
+        }
+        if(attempt===maxAttempts-1)throw new MarketError(`J-Quants ${path}: HTTP ${result.retry}（再試行上限）`,{fatal:result.retry===429});
+        log(`API ${path}: HTTP ${result.retry}; retry ${attempt+1}/${maxAttempts-1}`);
       }catch(e){
         // サーバー本文、URL、ヘッダー、キーをエラーに含めない。
-        if(e instanceof MarketError){if(e.fatal||attempt===1)throw e;}else if(attempt===1)throw new MarketError(`J-Quants ${path}: 通信またはJSON処理に失敗`);
+        if(e instanceof MarketError){if(e.fatal||attempt===maxAttempts-1)throw e;}else if(result.retry===429){
+          const delay=retryDelay(result.retryAfter,attempt,{baseMs:retryWaitMs,jitterMs:Math.floor(Math.random()*jitterMs)});
+          rateState.blockedUntil=Date.now()+delay;
+          await onCooldown();
+          log(`API ${path}: HTTP 429; cooldown ${Math.ceil(delay/1000)}s`);
+        }
+        if(attempt===maxAttempts-1)throw new MarketError(`J-Quants ${path}: 通信またはJSON処理に失敗`);
       }finally{clearTimeout(timer);signal.removeEventListener('abort',onAbort);}
-      await wait(retryWaitMs,signal);
+      await sleep(retryWaitMs,signal);
     }
   }
   return async(path,params={})=>{

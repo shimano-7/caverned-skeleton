@@ -9,6 +9,7 @@ export function displayDiscovery(data,now=new Date()){
   if(data.status!=='ok'||!Number.isFinite(age)||age<0||age>36*3600000||!Array.isArray(data.rankings)||!data.rankings.length){status.className='discovery-error';status.textContent=age>36*3600000?'更新から36時間以上経過したためランキングを非表示にしています。':data.message||'実データを取得できません。ランキングは表示しません。';return;}
   const c=data.coverage;
   status.textContent=`対象 ${c.attempted} / プライム ${c.universe}銘柄・評価可能 ${c.eligible}銘柄の上位${data.rankings.length}件。${c.selection}`;
+  if(data.warning){status.textContent+=` ${data.warning} 最終更新試行：${data.lastAttemptAt}`;}
   for(const [i,s]of data.rankings.entries()){
     if(!s.metrics||!s.technical||!Array.isArray(s.checks)||!Number.isFinite(s.score))throw Error('ランキング形式が不正');
     const card=el('article',undefined,'rank-card'),heading=el('div',undefined,'rank-heading');
@@ -16,6 +17,7 @@ export function displayDiscovery(data,now=new Date()){
     card.append(el('p',`終値 ¥${fmt(s.close)} ｜ 株価基準日 ${s.priceDate} ｜ 決算開示 ${s.metrics.disclosedAt}`,'small muted'));
     const metrics=el('dl',undefined,'metrics');
     for(const [label,value]of [['売上成長率',fmt(s.metrics.salesGrowth,'%')],['利益成長率',fmt(s.metrics.profitGrowth,'%')],['PER',fmt(s.metrics.per,'倍')],['PBR',fmt(s.metrics.pbr,'倍')],['ROE',fmt(s.metrics.roe,'%')],['配当利回り',fmt(s.metrics.dividendYield,'%')],['RSI (14)',fmt(s.technical.rsi)],['出来高',fmt(s.volume,'株')],['出来高 / 20日平均',fmt(s.technical.volumeRatio,'倍')],['25日線',fmt(s.technical.ma25)],['75日線',fmt(s.technical.ma75)]]){const pair=el('div');pair.append(el('dt',label),el('dd',value));metrics.append(pair);}card.append(metrics);
+    card.append(el('p',`株価取得：${s.priceFetchedAt||'不明'} ｜ 財務取得：${s.financialsFetchedAt||'不明'}`,'small muted'));
     const cross=s.technical.latestCross;card.append(el('p',cross?`${cross.type==='golden'?'GC':'DC'}：${cross.date}`:'GC/DC：取り込み期間内に交差なし','small'));
     card.append(el('p',`取得元：${data.source.name} ｜ 通期 ${s.metrics.fiscalYearEnd} / 前期 ${s.metrics.previousFiscalYearEnd}`,'small muted'));
     const details=el('details'),list=el('ul');details.append(el('summary','評価の根拠・配点を見る'));for(const check of s.checks)list.append(el('li',`${check.passed?'✓':'−'} ${check.label}：${check.passed?check.points:0}/${check.points}点`));details.append(list);card.append(details);

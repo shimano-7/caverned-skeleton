@@ -15,7 +15,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -25,12 +25,23 @@ jobs:
         with:
           node-version: '24'
       - run: npm test
+      - uses: actions/cache/restore@v4
+        with:
+          path: .market-cache
+          key: jquants-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            jquants-v1-
       - name: Update real Japanese market data
-        timeout-minutes: 6
+        timeout-minutes: 11
         env:
           JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
-          SCREEN_LIMIT: '20'
+          SCREEN_LIMIT: '10'
         run: npm run update:market
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .market-cache
+          key: jquants-v1-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Prepare static site
         run: |
           mkdir _site
