@@ -1,5 +1,5 @@
 import {analyze} from './analysis.js';
-import {priceFreshness} from './japan-calendar.js';
+import {stockFreshness,valuationTime} from './analysis-mode.js';
 export function rsi(rows, period=14) {
   if(rows.length<=period)return null;
   let gain=0,loss=0;
@@ -29,9 +29,10 @@ export function fundamentals(raw, price, asOf){
 export function evaluate(stock, now=new Date()){
   const {rows,metrics:m}=stock;
   if(rows.length<76)throw Error('76営業日以上の価格が必要');
-  const freshness=priceFreshness(rows.at(-1).date,now);
+  const freshness=stockFreshness(stock,now);
   if(freshness.status!=='available')throw Error(freshness.reason);
-  if((now-Date.parse(m.disclosedAt))/86400000>460)throw Error('通期決算が古すぎます');
+  if(Date.parse(m.disclosedAt)>valuationTime(stock,now).getTime())throw Error('データ基準日より後の財務情報です');
+  if((valuationTime(stock,now)-Date.parse(m.disclosedAt))/86400000>460)throw Error('通期決算が古すぎます');
   if(['salesGrowth','profitGrowth','per','pbr','roe','dividendYield'].some(k=>!Number.isFinite(m[k])))throw Error('必須財務指標が不足');
   const technical=analyze(rows),strength=rsi(rows),last=rows.at(-1),ma25=technical.ma25.at(-1),ma75=technical.ma75.at(-1);
   const baseline=rows.slice(-21,-1).reduce((sum,r)=>sum+r.volume,0)/20,volumeRatio=baseline>0?last.volume/baseline:null;
@@ -44,12 +45,12 @@ export const financialLabels={salesGrowth:'売上成長率',profitGrowth:'利益
 export function diagnoseStock(stock,now=new Date()){
   const rows=Array.isArray(stock.rows)?stock.rows:[],m=stock.metrics||{};
   const valid=rows.length>0&&rows.every((r,i)=>Number.isFinite(r.close)&&r.close>0&&Number.isFinite(r.volume)&&r.volume>=0&&Number.isFinite(Date.parse(r.date))&&(!i||r.date>rows[i-1].date));
-  const freshness=valid?priceFreshness(rows.at(-1).date,now):null;
+  const freshness=valid?stockFreshness(stock,now):null;
   const missingMetrics=Object.keys(financialLabels).filter(k=>!Number.isFinite(m[k]));
-  const financialAge=(now-Date.parse(m.disclosedAt))/86400000;
+  const financialAge=(valuationTime(stock,now)-Date.parse(m.disclosedAt))/86400000;
   const checks={
     price:{status:stock.priceError?'invalid':!rows.length?'missing':!valid?'invalid':freshness.status,count:rows.length,lastDate:rows.at(-1)?.date||null,freshness},
-    financials:{status:stock.financialError?'uncomputable':missingMetrics.length?'missing':!Number.isFinite(financialAge)?'invalid':financialAge>460?'stale':'available',missing:missingMetrics.map(k=>financialLabels[k]),detail:stock.financialError||null},
+    financials:{status:stock.financialError?'uncomputable':missingMetrics.length?'missing':!Number.isFinite(financialAge)||financialAge<0?'invalid':financialAge>460?'stale':'available',missing:missingMetrics.map(k=>financialLabels[k]),detail:stock.financialError||null},
     ma25:{status:!valid?'uncomputable':rows.length<25?'missing':'available',count:rows.length,required:25},
     ma75:{status:!valid?'uncomputable':rows.length<75?'missing':'available',count:rows.length,required:75}
   };
@@ -58,7 +59,7 @@ export function diagnoseStock(stock,now=new Date()){
   if(checks.financials.status!=='available'){
     if(stock.financialError)reasons.push(stock.financialError);
     if(missingMetrics.length)reasons.push('財務指標不足：'+checks.financials.missing.join('・'));
-    if(!missingMetrics.length&&!stock.financialError)reasons.push(Number.isFinite(financialAge)?'通期決算が古すぎます':'決算開示日が不足・不正');
+    if(!missingMetrics.length&&!stock.financialError)reasons.push(financialAge>460?'通期決算が古すぎます':'決算開示日が不足・不正またはデータ基準日より後');
   }
   if(checks.ma25.status!=='available')reasons.push(`25日移動平均：${valid?rows.length+'本 / 必要25本':'有効な株価がなく計算不可'}`);
   if(checks.ma75.status!=='available')reasons.push(`75日移動平均：${valid?rows.length+'本 / 必要75本':'有効な株価がなく計算不可'}`);

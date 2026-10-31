@@ -95,6 +95,6 @@ window.addEventListener('select-stock',event=>{
   const s=event.detail;market='JP';rows=s.rows;source='live';
   document.querySelectorAll('[data-market]').forEach(b=>{b.classList.toggle('active',b.dataset.market==='JP');b.setAttribute('aria-pressed',String(b.dataset.market==='JP'));});
   $('stock-name').value=s.name;document.getElementById('manual-analysis').open=true;
-  $('message').textContent=`JPX J-Quants API v2 ｜ 株価基準日 ${s.priceDate} ｜ 実データ（調整済み）`;
+  $('message').textContent=`JPX J-Quants API v2 ｜ データ基準日 ${s.priceDate} ｜ ${s.analysisMode==='free-delayed'?'12週間遅延の過去データ分析':'実データ'}（調整済み）`;
   render();$('source-tag').textContent='J-QUANTS';$('chart-title').scrollIntoView({behavior:'smooth',block:'start'});
 });

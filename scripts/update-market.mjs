@@ -6,6 +6,7 @@ const out=process.env.MARKET_OUTPUT||'data/japan.json';
 import {openCache,reusableSnapshot} from './market-cache.mjs';
 import {join} from 'node:path';
 import {diagnoseCache} from './diagnose-cache.mjs';
+import {FREE_MODE,freePlanDate} from '../analysis-mode.js';
 import {createClient,MarketError} from './market-client.mjs';
 export async function collect(apiKey,request=fetch,options={}){
   const {totalTimeoutMs=600000,log=console.log,...clientOptions}=options;
@@ -13,6 +14,7 @@ export async function collect(apiKey,request=fetch,options={}){
   if(!Number.isInteger(limit)||limit<5||limit>100)throw new MarketError('SCREEN_LIMITは5〜100',{fatal:true});
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),totalTimeoutMs);
+  const analysisMode=options.analysisMode||FREE_MODE;
   const rawApi=createClient(apiKey,{request,signal:controller.signal,log,...clientOptions});
   const api=options.cache?options.cache.wrap(rawApi):rawApi;
   try {
@@ -28,12 +30,12 @@ export async function collect(apiKey,request=fetch,options={}){
     attempted++;
     log(`Stock ${attempted}/${selected.length}: start`);
     try{
-      const priceParams={code:s.Code,from:from.toISOString().slice(0,7)+'-01'};
+      const priceParams={code:s.Code,from:from.toISOString().slice(0,7)+'-01',...(analysisMode===FREE_MODE?{to:freePlanDate()}: {})};
       const rows=normalizeBars(await api('equities/bars/daily',priceParams));
       if(!rows.length)throw Error('価格なし');
       if(!(rows.at(-1).rawClose>0))throw Error('未調整終値なし');
       const raw=await api('fins/summary',{code:s.Code});
-      stocks.push({code:String(s.Code),name:s.CoName,market:'JP',rows,priceFetchedAt:new Date(options.cache?.timestamp('equities/bars/daily',priceParams)??Date.now()).toISOString(),financialsFetchedAt:new Date(options.cache?.timestamp('fins/summary',{code:s.Code})??Date.now()).toISOString(),metrics:fundamentals(raw,rows.at(-1).rawClose,rows.at(-1).date)});
+      stocks.push({code:String(s.Code),name:s.CoName,market:'JP',analysisMode,rows,priceFetchedAt:new Date(options.cache?.timestamp('equities/bars/daily',priceParams)??Date.now()).toISOString(),financialsFetchedAt:new Date(options.cache?.timestamp('fins/summary',{code:s.Code})??Date.now()).toISOString(),metrics:fundamentals(raw,rows.at(-1).rawClose,rows.at(-1).date)});
       consecutiveErrors=0;
       log(`Stock ${attempted}/${selected.length}: received`);
     }catch(e){
@@ -46,7 +48,7 @@ export async function collect(apiKey,request=fetch,options={}){
     }
   }
   const ranked=rank(stocks);
-  return {...base,...ranked,status:ranked.rankings.length?'ok':'unavailable',coverage:{universe:universe.length,attempted,eligible:ranked.eligibleCount,selection:'東証プライム・コード昇順（上限あり）。全市場ランキングではありません。'},excluded:[...errors,...ranked.excluded],message:ranked.rankings.length?'分析対象内の上位銘柄です。':'必要な実データがそろわず、ランキングを生成できませんでした。'};
+  return {...base,...ranked,analysisMode,providerExpectedDate:analysisMode===FREE_MODE?freePlanDate():null,status:ranked.rankings.length?'ok':'unavailable',coverage:{universe:universe.length,attempted,eligible:ranked.eligibleCount,selection:'東証プライム・コード昇順（上限あり）。全市場ランキングではありません。'},excluded:[...errors,...ranked.excluded],message:ranked.rankings.length?'分析対象内の上位銘柄です。':'必要な実データがそろわず、ランキングを生成できませんでした。'};
   } finally {clearTimeout(timer);controller.abort();}
 }
 if(process.argv[1]?.endsWith('update-market.mjs')){
@@ -55,7 +57,7 @@ if(process.argv[1]?.endsWith('update-market.mjs')){
   let result;
   try{
     if(process.env.CACHE_ONLY==='true'){
-      result=diagnoseCache(cache);
+      result=diagnoseCache(cache,{analysisMode:FREE_MODE});
     }else{
     if(!process.env.JQUANTS_API_KEY)throw new MarketError('JQUANTS_API_KEYが未設定です。GitHub Secretsを設定してください。');
     result=await collect(process.env.JQUANTS_API_KEY,fetch,{cache,rateState:cache.state.rate,onCooldown:cache.save});
@@ -65,10 +67,12 @@ if(process.argv[1]?.endsWith('update-market.mjs')){
     }
   }catch(e){
     const message=e instanceof MarketError?e.message:'データ更新に失敗しました。設定と接続を確認してください。';
-    result={...base,message};
+    result={...base,analysisMode:FREE_MODE,message};
+    const cachedDiagnosis=diagnoseCache(cache,{analysisMode:FREE_MODE});
+    if(cachedDiagnosis.rankings.length)result={...cachedDiagnosis,lastAttemptAt:new Date().toISOString(),warning:`更新未完了：${message}。保存済みの過去データを再分析しています。`};
     try{
       const previous=JSON.parse(await readFile(snapshotPath,'utf8'));
-      if(reusableSnapshot(previous))result={...previous,lastAttemptAt:new Date().toISOString(),warning:`更新未完了：${message}。取得済みデータを表示しています。`};
+      if(!result.rankings.length&&reusableSnapshot(previous))result={...previous,lastAttemptAt:new Date().toISOString(),warning:`更新未完了：${message}。取得済みデータを表示しています。`};
     }catch{}
     console.error(`Market update stopped: ${message}`);
   }

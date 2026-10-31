@@ -1,25 +1,27 @@
-import {priceFreshness,lastCompletedSession} from './japan-calendar.js';
+import {lastCompletedSession} from './japan-calendar.js';
+import {stockFreshness,FREE_MODE,freePlanDate} from './analysis-mode.js';
 const status=document.getElementById('discovery-status'),container=document.getElementById('rankings');
 const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
 const fmt=(v,suffix='')=>Number.isFinite(v)?v.toLocaleString('ja-JP',{maximumFractionDigits:2})+suffix:'取得できません';
 export function displayDiscovery(data,now=new Date()){
   container.replaceChildren();
   // 静的JSON生成後に新たな取引が終了した場合も、古い上位銘柄を最新扱いしない。
-  const outdated=(data.rankings||[]).filter(s=>priceFreshness(s.priceDate,now).status!=='available');
+  const outdated=(data.rankings||[]).filter(s=>stockFreshness(s,now).status!=='available');
   if(outdated.length){
-    const additions=outdated.map(s=>{const freshness=priceFreshness(s.priceDate,now);return {code:s.code,name:s.name,priceFetchedAt:s.priceFetchedAt,financialsFetchedAt:s.financialsFetchedAt,reason:freshness.reason,checks:{price:{status:freshness.status,lastDate:s.priceDate,freshness},financials:{status:'available'},ma25:{status:'available'},ma75:{status:'available'}}};});
+    const additions=outdated.map(s=>{const freshness=stockFreshness(s,now);return {code:s.code,name:s.name,priceFetchedAt:s.priceFetchedAt,financialsFetchedAt:s.financialsFetchedAt,reason:freshness.reason,checks:{price:{status:freshness.status,lastDate:s.priceDate,freshness},financials:{status:'available'},ma25:{status:'available'},ma75:{status:'available'}}};});
     data={...data,eligibleCount:null,coverage:{...data.coverage,eligible:'再判定が必要'},rankings:data.rankings.filter(s=>!outdated.includes(s)),excluded:[...(data.excluded||[]),...additions],exclusionSummary:null};
   }
   if(data.calendar){let expectedDate=null;try{expectedDate=lastCompletedSession(now).expectedDate;}catch{}data={...data,calendar:{...data.calendar,expectedDate}};}
 
   const source=document.getElementById('discovery-source');
   source.textContent=`取得元：${data.source?.name||'不明'} ｜ ${data.cacheOnly?'再判定日時':'更新試行'}：${data.generatedAt?new Date(data.generatedAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})+' JST':'未取得'}`;
+  if(data.analysisMode===FREE_MODE)source.textContent+=` ｜ 12週間遅延の過去データ分析 ｜ Free提供目安日：${freePlanDate(now)}（実際の収録日は銘柄ごとに表示）`;
   const excluded=Array.isArray(data.excluded)?data.excluded:[];
   const diagnostics=el('section',undefined,'exclusion-report');
   diagnostics.append(el('h2',`データ診断：対象 ${data.coverage?.attempted??'不明'}銘柄 / 評価可能 ${data.eligibleCount??data.coverage?.eligible??0}銘柄 / 除外 ${excluded.length}銘柄`));
   const labels={price:'株価データ',financials:'財務データ',ma25:'25日移動平均',ma75:'75日移動平均'};
   const statuses={available:'利用可能',missing:'不足',invalid:'不正',stale:'古いため対象外',uncomputable:'計算不可',pending:'当日データ反映待ち（対象外）',unknown:'判定不可'};
-  if(data.calendar)diagnostics.append(el('p',`鮮度基準：最終終了取引日 ${data.calendar.expectedDate||'判定不可'}（日本時間） / ${data.calendar.name}`,'small muted'));
+  if(data.calendar&&data.analysisMode!==FREE_MODE)diagnostics.append(el('p',`鮮度基準：最終終了取引日 ${data.calendar.expectedDate||'判定不可'}（日本時間） / ${data.calendar.name}`,'small muted'));
   if(excluded.length){
     const counts=data.exclusionSummary?.categories||{};
     diagnostics.append(el('p',Object.entries(labels).map(([key,label])=>`${label}の不足・不正等 ${counts[key]??excluded.filter(s=>s.checks?.[key]&&s.checks[key].status!=='available').length}件`).join(' / '),'small muted'));
@@ -40,23 +42,25 @@ export function displayDiscovery(data,now=new Date()){
   }else diagnostics.append(el('p',data.cacheOnly&&!data.coverage?.attempted?'キャッシュがないため銘柄別診断はできません。APIへの追加アクセスは行っていません。':'除外理由の記録はありません。','small muted'));
   container.append(diagnostics);
   const age=now-Date.parse(data.generatedAt);
-  if(data.status!=='ok'||!Number.isFinite(age)||age<0||age>36*3600000||!Array.isArray(data.rankings)||!data.rankings.length){status.className='discovery-error';status.textContent=age>36*3600000?'更新から36時間以上経過したためランキングを非表示にしています。':data.message||'実データを取得できません。ランキングは表示しません。';return;}
+  if(data.status!=='ok'||!Number.isFinite(age)||age<0||(age>36*3600000&&data.analysisMode!==FREE_MODE)||!Array.isArray(data.rankings)||!data.rankings.length){status.className='discovery-error';status.textContent=age>36*3600000?'更新から36時間以上経過したためランキングを非表示にしています。':data.message||'実データを取得できません。ランキングは表示しません。';return;}
+  if(age>36*3600000&&data.analysisMode===FREE_MODE)source.textContent+=' ｜ 再分析から36時間以上経過・保存済み過去結果';
   const c=data.coverage;
   status.textContent=`対象 ${c.attempted} / プライム ${c.universe}銘柄・評価可能 ${c.eligible}銘柄の上位${data.rankings.length}件。${c.selection}`;
   if(data.warning){status.textContent+=` ${data.warning} 最終更新試行：${data.lastAttemptAt}`;}
   for(const [i,s]of data.rankings.entries()){
     if(!s.metrics||!s.technical||!Array.isArray(s.checks)||!Number.isFinite(s.score))throw Error('ランキング形式が不正');
     const card=el('article',undefined,'rank-card'),heading=el('div',undefined,'rank-heading');
-    heading.append(el('h2',`${i+1}. ${s.name} (${s.code})`),el('span',`${s.score}点 · ${s.verdict}`,'rank-score'));card.append(heading);
-    card.append(el('p',`終値 ¥${fmt(s.close)} ｜ 株価基準日 ${s.priceDate} ｜ 決算開示 ${s.metrics.disclosedAt}`,'small muted'));
+    heading.append(el('h2',`${i+1}. ${s.name} (${s.code})`),el('span',`${s.score}点 · ${s.verdict}${s.analysisMode===FREE_MODE?'（過去時点）':''}`,'rank-score'));card.append(heading);
+    card.append(el('p',`終値 ¥${fmt(s.close)} ｜ データ基準日 ${s.priceDate} ｜ 決算開示 ${s.metrics.disclosedAt}`,'small muted'));
     const metrics=el('dl',undefined,'metrics');
     for(const [label,value]of [['売上成長率',fmt(s.metrics.salesGrowth,'%')],['利益成長率',fmt(s.metrics.profitGrowth,'%')],['PER',fmt(s.metrics.per,'倍')],['PBR',fmt(s.metrics.pbr,'倍')],['ROE',fmt(s.metrics.roe,'%')],['配当利回り',fmt(s.metrics.dividendYield,'%')],['RSI (14)',fmt(s.technical.rsi)],['出来高',fmt(s.volume,'株')],['出来高 / 20日平均',fmt(s.technical.volumeRatio,'倍')],['25日線',fmt(s.technical.ma25)],['75日線',fmt(s.technical.ma75)]]){const pair=el('div');pair.append(el('dt',label),el('dd',value));metrics.append(pair);}card.append(metrics);
     card.append(el('p',`株価取得：${s.priceFetchedAt||'不明'} ｜ 財務取得：${s.financialsFetchedAt||'不明'}`,'small muted'));
-    if(s.freshness)card.append(el('p',`鮮度基準取引日：${s.freshness.expectedDate} / 不足 ${s.freshness.missingSessions}営業日`,'small muted'));
+    if(s.analysisMode===FREE_MODE)card.append(el('p','12週間遅延の過去データ分析。この評価は上記データ基準日時点の参考情報です。現在の売買推奨ではありません。','small'));
+    if(s.freshness&&s.analysisMode!==FREE_MODE)card.append(el('p',`鮮度基準取引日：${s.freshness.expectedDate} / 不足 ${s.freshness.missingSessions}営業日`,'small muted'));
     const cross=s.technical.latestCross;card.append(el('p',cross?`${cross.type==='golden'?'GC':'DC'}：${cross.date}`:'GC/DC：取り込み期間内に交差なし','small'));
     card.append(el('p',`取得元：${data.source.name} ｜ 通期 ${s.metrics.fiscalYearEnd} / 前期 ${s.metrics.previousFiscalYearEnd}`,'small muted'));
     const details=el('details'),list=el('ul');details.append(el('summary','評価の根拠・配点を見る'));for(const check of s.checks)list.append(el('li',`${check.passed?'✓':'−'} ${check.label}：${check.passed?check.points:0}/${check.points}点`));details.append(list);card.append(details);
-    const button=el('button','この銘柄のチャートを開く');button.onclick=()=>window.dispatchEvent(new CustomEvent('select-stock',{detail:s}));card.append(button);container.append(card);
+    const button=el('button',s.analysisMode===FREE_MODE?'この銘柄の過去チャートを開く':'この銘柄のチャートを開く');button.onclick=()=>window.dispatchEvent(new CustomEvent('select-stock',{detail:s}));card.append(button);container.append(card);
   }
 }
 try{const response=await fetch('./data/japan.json',{cache:'no-store'});if(!response.ok)throw Error();displayDiscovery(await response.json());}catch{container.replaceChildren();status.className='discovery-error';status.textContent='実データを取得できません。架空の株価やランキングへの置き換えは行いません。';}

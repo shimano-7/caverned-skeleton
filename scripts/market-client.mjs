@@ -14,12 +14,12 @@ export function retryDelay(value,attempt,{now=Date.now(),baseMs=60000,jitterMs=M
   const header=Number.isFinite(seconds)?seconds:Math.max(0,Date.parse(value)-now);
   return Math.max(baseMs*2**attempt,Number.isFinite(header)?header:0)+jitterMs;
 }
-export function createClient(apiKey,{request=fetch,signal,requestTimeoutMs=15000,pauseMs=13000,maxPages=10,retryWaitMs=60000,maxAttempts=3,jitterMs=1000,rateState={},onCooldown=async()=>{},sleep=wait,log=console.log}={}){
+export function createClient(apiKey,{request=fetch,signal,requestTimeoutMs=15000,pauseMs=13000,maxPages=10,retryWaitMs=60000,maxAttempts=3,jitterMs=1000,rateState={},onCooldown=async()=>{},sleep=wait,now=Date.now,log=console.log}={}){
   let nextRequest=0;
   async function page(path,params){
     for(let attempt=0;attempt<maxAttempts;attempt++){
-      await sleep(Math.max(0,nextRequest-Date.now(),(rateState.blockedUntil||0)-Date.now()),signal);
-      nextRequest=Date.now()+pauseMs;
+      await sleep(Math.max(0,nextRequest-now(),(rateState.blockedUntil||0)-now()),signal);
+      nextRequest=now()+pauseMs;
       const controller=new AbortController();
       let timer,onAbort;
       try{
@@ -43,7 +43,7 @@ export function createClient(apiKey,{request=fetch,signal,requestTimeoutMs=15000
         if(result.body)return result.body;
         if(result.retry===429){
           const delay=retryDelay(result.retryAfter,attempt,{baseMs:retryWaitMs,jitterMs:Math.floor(Math.random()*jitterMs)});
-          rateState.blockedUntil=Date.now()+delay;
+          rateState.blockedUntil=now()+delay;
           await onCooldown();
           log(`API ${path}: HTTP 429; cooldown ${Math.ceil(delay/1000)}s`);
         }
@@ -51,13 +51,8 @@ export function createClient(apiKey,{request=fetch,signal,requestTimeoutMs=15000
         log(`API ${path}: HTTP ${result.retry}; retry ${attempt+1}/${maxAttempts-1}`);
       }catch(e){
         // サーバー本文、URL、ヘッダー、キーをエラーに含めない。
-        if(e instanceof MarketError){if(e.fatal||attempt===maxAttempts-1)throw e;}else if(result.retry===429){
-          const delay=retryDelay(result.retryAfter,attempt,{baseMs:retryWaitMs,jitterMs:Math.floor(Math.random()*jitterMs)});
-          rateState.blockedUntil=Date.now()+delay;
-          await onCooldown();
-          log(`API ${path}: HTTP 429; cooldown ${Math.ceil(delay/1000)}s`);
-        }
-        if(attempt===maxAttempts-1)throw new MarketError(`J-Quants ${path}: 通信またはJSON処理に失敗`);
+        if(e instanceof MarketError){if(e.fatal||attempt===maxAttempts-1)throw e;}
+        else if(attempt===maxAttempts-1)throw new MarketError(`J-Quants ${path}: 通信またはJSON処理に失敗`);
       }finally{clearTimeout(timer);signal.removeEventListener('abort',onAbort);}
       await sleep(retryWaitMs,signal);
     }

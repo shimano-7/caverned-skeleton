@@ -1,6 +1,6 @@
 import {mkdir,readFile,writeFile,rename} from 'node:fs/promises';
 import {join} from 'node:path';
-import {priceFreshness} from '../japan-calendar.js';
+import {stockFreshness} from '../analysis-mode.js';
 export async function openCache(directory,{now=()=>Date.now(),log=console.log}={}){
   await mkdir(directory,{recursive:true});
   const file=join(directory,'market.json');
@@ -19,5 +19,5 @@ export async function openCache(directory,{now=()=>Date.now(),log=console.log}={
 }
 export function reusableSnapshot(snapshot,now=Date.now()){
   const age=now-Date.parse(snapshot?.generatedAt);
-  return snapshot?.status==='ok'&&Array.isArray(snapshot.rankings)&&snapshot.rankings.length>0&&age>=0&&age<36*3600000&&snapshot.rankings.every(s=>priceFreshness(s.priceDate,new Date(now)).status==='available');
+  return snapshot?.status==='ok'&&Array.isArray(snapshot.rankings)&&snapshot.rankings.length>0&&age>=0&&age<36*3600000&&snapshot.rankings.every(s=>stockFreshness(s,new Date(now)).status==='available');
 }
