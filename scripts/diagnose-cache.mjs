@@ -1,4 +1,5 @@
 import {normalizeBars,fundamentals,rank} from '../discovery.js';
+import {calendarSource,lastCompletedSession} from '../japan-calendar.js';
 // fetchを受け取らず、保存済みデータのみを読み取る。TTL超過も診断し、鮮度は判定で除外する。
 export function diagnoseCache(cache,{limit=10,now=new Date(),log=console.log}={}){
   if(!Number.isInteger(limit)||limit<1||limit>100)throw Error('診断対象件数が不正');
@@ -26,7 +27,9 @@ export function diagnoseCache(cache,{limit=10,now=new Date(),log=console.log}={}
     return stock;
   });
   const result=rank(stocks,now);
-  for(const item of result.excluded)log(`Excluded ${item.code}: ${item.reason}`);
+  let expectedDate=null;try{expectedDate=lastCompletedSession(now).expectedDate;}catch{}
+  log(`Freshness calendar: expected=${expectedDate||'unknown'}; calendar=${calendarSource.version}; timestamp=Asia/Tokyo`);
+  for(const item of result.excluded)log(`Excluded ${item.code}: ${item.reason}; actual=${item.checks.price.lastDate||'none'}; fetched=${item.priceFetchedAt||'none'}`);
   log(`Cache diagnosis: examined=${stocks.length}; eligible=${result.eligibleCount}; excluded=${result.excluded.length}; API calls=0`);
-  return {schemaVersion:1,status:result.rankings.length?'ok':'unavailable',market:'JP',source:{name:'JPX J-Quants API v2（保存済みデータのみ）',url:'https://jpx-jquants.com/'},...result,generatedAt:now.toISOString(),diagnosedAt:now.toISOString(),cacheOnly:true,coverage:{universe:universe.length,attempted:stocks.length,eligible:result.eligibleCount,selection:master?'保存済み東証プライム・コード昇順。市場データAPIへのアクセスなし。':'銘柄一覧なし：キャッシュ内の銘柄のみを診断。市場データAPIへのアクセスなし。'},message:stocks.length?'保存済みデータを再判定しました。除外理由を確認してください。':'保存済みキャッシュがありません。APIにはアクセスしていません。'};
+  return {schemaVersion:1,status:result.rankings.length?'ok':'unavailable',market:'JP',source:{name:'JPX J-Quants API v2（保存済みデータのみ）',url:'https://jpx-jquants.com/'},...result,generatedAt:now.toISOString(),diagnosedAt:now.toISOString(),cacheOnly:true,calendar:{...calendarSource,expectedDate},coverage:{universe:universe.length,attempted:stocks.length,eligible:result.eligibleCount,selection:master?'保存済み東証プライム・コード昇順。市場データAPIへのアクセスなし。':'銘柄一覧なし：キャッシュ内の銘柄のみを診断。市場データAPIへのアクセスなし。'},message:stocks.length?'保存済みデータを再判定しました。除外理由を確認してください。':'保存済みキャッシュがありません。APIにはアクセスしていません。'};
 }

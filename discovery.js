@@ -1,4 +1,5 @@
 import {analyze} from './analysis.js';
+import {priceFreshness} from './japan-calendar.js';
 export function rsi(rows, period=14) {
   if(rows.length<=period)return null;
   let gain=0,loss=0;
@@ -28,7 +29,8 @@ export function fundamentals(raw, price, asOf){
 export function evaluate(stock, now=new Date()){
   const {rows,metrics:m}=stock;
   if(rows.length<76)throw Error('76営業日以上の価格が必要');
-  if((now-Date.parse(rows.at(-1).date))/86400000>7)throw Error('株価が7日超前です');
+  const freshness=priceFreshness(rows.at(-1).date,now);
+  if(freshness.status!=='available')throw Error(freshness.reason);
   if((now-Date.parse(m.disclosedAt))/86400000>460)throw Error('通期決算が古すぎます');
   if(['salesGrowth','profitGrowth','per','pbr','roe','dividendYield'].some(k=>!Number.isFinite(m[k])))throw Error('必須財務指標が不足');
   const technical=analyze(rows),strength=rsi(rows),last=rows.at(-1),ma25=technical.ma25.at(-1),ma75=technical.ma75.at(-1);
@@ -36,23 +38,23 @@ export function evaluate(stock, now=new Date()){
   const rules=[['売上成長率10%以上',m.salesGrowth>=10,15],['利益成長率10%以上',m.profitGrowth>=10,15],['PER 0〜20倍',m.per>0&&m.per<=20,10],['PBR 0〜1.5倍',m.pbr>0&&m.pbr<=1.5,10],['ROE 8%以上',m.roe>=8,10],['配当利回り2%以上',m.dividendYield>=2,5],['25日線が75日線より上',ma25>ma75,10],['終値が25日線より上',last.close>ma25,10],['RSI 40〜70',strength>=40&&strength<=70,10],['出来高が直前20日平均の1.2倍以上',volumeRatio>=1.2,5]];
   const score=rules.reduce((sum,[,pass,points])=>sum+(pass?points:0),0);
   const verdict=score>=70&&technical.verdict==='買い'&&strength<75?'買い候補':score<40||technical.verdict==='見送り'?'見送り':'待ち';
-  return {...stock,score,verdict,checks:rules.map(([label,passed,points])=>({label,passed,points})),technical:{ma25,ma75,rsi:strength,volumeRatio,latestCross:technical.crosses.at(-1)||null},priceDate:last.date,close:last.close,volume:last.volume};
+  return {...stock,freshness,score,verdict,checks:rules.map(([label,passed,points])=>({label,passed,points})),technical:{ma25,ma75,rsi:strength,volumeRatio,latestCross:technical.crosses.at(-1)||null},priceDate:last.date,close:last.close,volume:last.volume};
 }
 export const financialLabels={salesGrowth:'売上成長率',profitGrowth:'利益成長率',per:'PER',pbr:'PBR',roe:'ROE',dividendYield:'配当利回り'};
 export function diagnoseStock(stock,now=new Date()){
   const rows=Array.isArray(stock.rows)?stock.rows:[],m=stock.metrics||{};
   const valid=rows.length>0&&rows.every((r,i)=>Number.isFinite(r.close)&&r.close>0&&Number.isFinite(r.volume)&&r.volume>=0&&Number.isFinite(Date.parse(r.date))&&(!i||r.date>rows[i-1].date));
-  const priceAge=valid?(now-Date.parse(rows.at(-1).date))/86400000:NaN;
+  const freshness=valid?priceFreshness(rows.at(-1).date,now):null;
   const missingMetrics=Object.keys(financialLabels).filter(k=>!Number.isFinite(m[k]));
   const financialAge=(now-Date.parse(m.disclosedAt))/86400000;
   const checks={
-    price:{status:stock.priceError?'invalid':!rows.length?'missing':!valid?'invalid':priceAge>7?'stale':priceAge<0?'invalid':'available',count:rows.length,lastDate:rows.at(-1)?.date||null},
+    price:{status:stock.priceError?'invalid':!rows.length?'missing':!valid?'invalid':freshness.status,count:rows.length,lastDate:rows.at(-1)?.date||null,freshness},
     financials:{status:stock.financialError?'uncomputable':missingMetrics.length?'missing':!Number.isFinite(financialAge)?'invalid':financialAge>460?'stale':'available',missing:missingMetrics.map(k=>financialLabels[k]),detail:stock.financialError||null},
     ma25:{status:!valid?'uncomputable':rows.length<25?'missing':'available',count:rows.length,required:25},
     ma75:{status:!valid?'uncomputable':rows.length<75?'missing':'available',count:rows.length,required:75}
   };
   const reasons=[];
-  if(checks.price.status!=='available')reasons.push(stock.priceError?stock.priceError:!rows.length?'株価データなし':!valid?'株価データの値・日付が不正':priceAge>7?'株価が7日超前です':'株価の日付が未来です');
+  if(checks.price.status!=='available')reasons.push(stock.priceError?stock.priceError:!rows.length?'株価データなし':!valid?'株価データの値・日付が不正':freshness.reason);
   if(checks.financials.status!=='available'){
     if(stock.financialError)reasons.push(stock.financialError);
     if(missingMetrics.length)reasons.push('財務指標不足：'+checks.financials.missing.join('・'));
